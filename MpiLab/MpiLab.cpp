@@ -154,20 +154,46 @@ int main(int argc, char* argv[]) {
 		MPI_Barrier(MPI_COMM_WORLD);
 	}
 
-	MPI_Barrier(MPI_COMM_WORLD);
+	std::vector<double> result_matrix;
+
+	if (rank == 0) {
+		result_matrix.resize(rows * cols, 0.0);
+	}
+
+	std::vector<int> receive_counts(size);
+	std::vector<int> displacements(size);
+
 	for (int i = 0; i < size; ++i) {
-		if (rank == i) {
-			std::cout << "Process " << rank << " received rows " << start_row << " to " << end_row << std::endl;
-			for (int r = 0; r <= end_row - start_row; ++r) {
-				for (int c = 0; c < cols; ++c) {
-					std::cout << local_chunk[r * cols + c] << " ";
-				}
-				std::cout << std::endl;
+		receive_counts[i] = (i < remainder) ? (rows_per_process + 1) * cols : rows_per_process * cols;
+		displacements[i] = (i < remainder) ? i * (rows_per_process + 1) * cols : (remainder + i * rows_per_process) * cols;
+	}
+
+	MPI_Gatherv(local_chunk.data(), local_chunk_size, MPI_DOUBLE, rank == 0 ? result_matrix.data() : NULL, receive_counts.data(), displacements.data(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+	if (rank == 0 && rows < 20 && cols < 20) {
+		std::cout << "Full Matrix:" << std::endl;
+		for (int i = 0; i < rows; ++i) {
+			for (int j = 0; j < cols; ++j) {
+				std::cout << result_matrix[i * cols + j] << " ";
 			}
 			std::cout << std::endl;
 		}
-		MPI_Barrier(MPI_COMM_WORLD);
 	}
+
+	//MPI_Barrier(MPI_COMM_WORLD);
+	//for (int i = 0; i < size; ++i) {
+	//	if (rank == i) {
+	//		std::cout << "Process " << rank << " received rows " << start_row << " to " << end_row << std::endl;
+	//		for (int r = 0; r <= end_row - start_row; ++r) {
+	//			for (int c = 0; c < cols; ++c) {
+	//				std::cout << local_chunk[r * cols + c] << " ";
+	//			}
+	//			std::cout << std::endl;
+	//		}
+	//		std::cout << std::endl;
+	//	}
+	//	MPI_Barrier(MPI_COMM_WORLD);
+	//}
 
 	MPI_Finalize();
 	return 0;
