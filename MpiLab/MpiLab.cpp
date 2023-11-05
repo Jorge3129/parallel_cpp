@@ -31,6 +31,8 @@ int main(int argc, char* argv[]) {
 		return 1;
 	}
 
+	double start_time = MPI_Wtime();
+
 	const int rows = std::atoi(argv[1]);
 	const int cols = std::atoi(argv[2]);
 	const int I_numIterations = std::atoi(argv[3]);
@@ -63,14 +65,6 @@ int main(int argc, char* argv[]) {
 			full_matrix[getIndex(cell.first.first, cell.first.second, cols)] = cell.second;
 		}
 
-		//std::cout << "Full Matrix:" << std::endl;
-		//for (int i = 0; i < rows; ++i) {
-		//	for (int j = 0; j < cols; ++j) {
-		//		std::cout << full_matrix[i * cols + j] << " ";
-		//	}
-		//	std::cout << std::endl;
-		//}
-
 		for (int i = 0; i < size; ++i) {
 			int send_start_row = (i < remainder) ? i * (rows_per_process + 1) : i * rows_per_process + remainder;
 			int send_local_chunk_size = (i < remainder) ? (rows_per_process + 1) * cols : rows_per_process * cols;
@@ -87,20 +81,30 @@ int main(int argc, char* argv[]) {
 		MPI_Recv(local_chunk.data(), local_chunk_size, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 	}
 
+	std::vector<MPI_Request> requests;
+	requests.reserve(4);
+	std::vector<double> top_row_buffer(cols), bottom_row_buffer(cols);
+
 	for (int iter = 0; iter < I_numIterations; ++iter) {
-		std::vector<double> top_row_buffer(cols), bottom_row_buffer(cols);
 		if (rank > 0) {
-			MPI_Send(local_chunk.data(), cols, MPI_DOUBLE, rank - 1, 0, MPI_COMM_WORLD);
+			requests.push_back(MPI_Request());
+			MPI_Isend(local_chunk.data(), cols, MPI_DOUBLE, rank - 1, 0, MPI_COMM_WORLD, &requests.back());
 		}
 		if (rank < size - 1) {
-			MPI_Recv(bottom_row_buffer.data(), cols, MPI_DOUBLE, rank + 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-		}
-		if (rank > 0) {
-			MPI_Recv(top_row_buffer.data(), cols, MPI_DOUBLE, rank - 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+			requests.push_back(MPI_Request());
+			MPI_Irecv(bottom_row_buffer.data(), cols, MPI_DOUBLE, rank + 1, 0, MPI_COMM_WORLD, &requests.back());
 		}
 		if (rank < size - 1) {
-			MPI_Send(&local_chunk[(end_row - start_row) * cols], cols, MPI_DOUBLE, rank + 1, 0, MPI_COMM_WORLD);
+			requests.push_back(MPI_Request());
+			MPI_Isend(&local_chunk[(end_row - start_row) * cols], cols, MPI_DOUBLE, rank + 1, 0, MPI_COMM_WORLD, &requests.back());
 		}
+		if (rank > 0) {
+			requests.push_back(MPI_Request());
+			MPI_Irecv(top_row_buffer.data(), cols, MPI_DOUBLE, rank - 1, 0, MPI_COMM_WORLD, &requests.back());
+		}
+
+		MPI_Waitall(requests.size(), requests.data(), MPI_STATUSES_IGNORE);
+		requests.clear();
 
 		std::vector<double> new_local_chunk(local_chunk_size);
 		for (int local_row = 0; local_row < end_row - start_row + 1; ++local_row) {
@@ -150,8 +154,6 @@ int main(int argc, char* argv[]) {
 		}
 
 		local_chunk.swap(new_local_chunk);
-
-		MPI_Barrier(MPI_COMM_WORLD);
 	}
 
 	std::vector<double> result_matrix;
@@ -170,30 +172,22 @@ int main(int argc, char* argv[]) {
 
 	MPI_Gatherv(local_chunk.data(), local_chunk_size, MPI_DOUBLE, rank == 0 ? result_matrix.data() : NULL, receive_counts.data(), displacements.data(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
-	if (rank == 0 && rows < 20 && cols < 20) {
-		std::cout << "Full Matrix:" << std::endl;
-		for (int i = 0; i < rows; ++i) {
-			for (int j = 0; j < cols; ++j) {
-				std::cout << result_matrix[i * cols + j] << " ";
-			}
-			std::cout << std::endl;
-		}
-	}
+	double end_time = MPI_Wtime();
 
-	//MPI_Barrier(MPI_COMM_WORLD);
-	//for (int i = 0; i < size; ++i) {
-	//	if (rank == i) {
-	//		std::cout << "Process " << rank << " received rows " << start_row << " to " << end_row << std::endl;
-	//		for (int r = 0; r <= end_row - start_row; ++r) {
-	//			for (int c = 0; c < cols; ++c) {
-	//				std::cout << local_chunk[r * cols + c] << " ";
-	//			}
-	//			std::cout << std::endl;
-	//		}
-	//		std::cout << std::endl;
-	//	}
-	//	MPI_Barrier(MPI_COMM_WORLD);
-	//}
+	if (rank == 0) {
+		if (rows < 20 && cols < 20) {
+			std::cout << "Full Matrix:" << std::endl;
+
+			for (int i = 0; i < rows; ++i) {
+				for (int j = 0; j < cols; ++j) {
+					std::cout << result_matrix[i * cols + j] << " ";
+				}
+				std::cout << std::endl;
+			}
+		}
+		
+		std::cout << "Elapsed time: " << end_time - start_time << std::endl;
+	}
 
 	MPI_Finalize();
 	return 0;
